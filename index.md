@@ -13,3 +13,11 @@
 [RMD](IE360_HW2.Rmd)
 
 [PDF](IE360_HW2.pdf)
+
+### Project
+
+[HTML](Project_Report.html)
+
+[RMD](Project_Report.Rmd)
+
+[PDF](Project_Report.pdf)

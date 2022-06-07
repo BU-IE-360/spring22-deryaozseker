@@ -1,0 +1,303 @@
+---
+title: "IE360 PROJECT"
+author: "Buse Erduran, Baran Kırkgöz, Derya Özşeker"
+date: '2022-06-07'
+output:
+  html_document: default
+  pdf_document: default
+---
+
+There is a solar power plant named "Kıvanç 2 Güneş Enerji Santrali" in Mersin, Turkey which is located between 36-37° north latitude and 33-35° east longitude.The aim of this project is to analyze the behavior of that power plant's hourly solar electric production by looking at the past data and choosing an approach to predict the future productions. With respect to the 'persistence approach', the forecasts will be with lag 48, which corresponds to 2 days.
+
+There are some variables that might affect the production rates:
+
+TEMP: This is the temperature variable for this location. There are two impacts of temperature. The first one is, temperature can represent the seasonality. In a season, hourly temperature values will be similar. The second one is, the efficiency of solar plants decreases with higher temperatures due to the fact that high temperatures affect the solar panels.
+
+REL_HUMIDITY: This value stands for relative humidity at the provided location. One can reach the information about the rainy or cloudy times by looking at this value. Rainy or cloudy times, which means relative humidity potentially decrease the production.
+
+DSWRF: This is the short version of downward shortwave radiation flux which is known to be highly important for the production level. 
+
+CLOUD_LOW_LAYER: This is total cloud cover data (in terms of percentage) for low-level type of clouds which is also expected to affect the production rate. 
+
+By looking at the paired correlations between these variables and the production data, one can see the possible relations between them and that will give an idea for choosing the regressors when founding prediction models.
+
+Uploading Necessary Libraries:
+```{r,warning=FALSE}
+library(xlsx)
+library(lubridate)
+library(zoo)
+library(ggplot2)
+library(RcppRoll)
+library(GGally)
+library(skimr)
+library(forecast)
+library(dplyr)
+library(data.table)
+library(reshape)
+library(reshape2)
+library(readr)
+library(caTools)
+```
+
+
+Data Manipulation:
+```{r,warning=FALSE}
+long_weather <- data.table(read_csv("~/Desktop/project_data/long_weather.csv"))
+production <- data.table(read_csv("~/Desktop/project_data/production.csv"))
+str(long_weather)
+wide_weather= dcast(long_weather, date+hour~lat+lon+variable)
+data <- data.table(merge(wide_weather,production))
+data[,AverageTEMP:=rowMeans(data[,c("36.75_33.5_TEMP","36.75_33.25_TEMP","36.75_33_TEMP","36.5_33.5_TEMP","36.5_33.25_TEMP","36.5_33_TEMP","36.25_33.5_TEMP","36.25_33.25_TEMP","36.25_33_TEMP")])]
+data[,AverageREL_HUMIDITY:=rowMeans(data[,c("36.75_33.5_REL_HUMIDITY","36.75_33.25_REL_HUMIDITY","36.75_33_REL_HUMIDITY","36.5_33.5_REL_HUMIDITY","36.5_33.25_REL_HUMIDITY","36.5_33_REL_HUMIDITY","36.25_33.5_REL_HUMIDITY","36.25_33.25_REL_HUMIDITY","36.25_33_REL_HUMIDITY")])]
+data[,AverageDSWRF:=rowMeans(data[,c("36.75_33.5_DSWRF","36.75_33.25_DSWRF","36.75_33_DSWRF","36.5_33.5_DSWRF","36.5_33.25_DSWRF","36.5_33_DSWRF","36.25_33.5_DSWRF","36.25_33.25_DSWRF","36.25_33_DSWRF")])]
+data[,AverageCLOUD_LOW_LAYER:=rowMeans(data[,c("36.75_33.5_CLOUD_LOW_LAYER","36.75_33.25_CLOUD_LOW_LAYER","36.75_33_CLOUD_LOW_LAYER","36.5_33.5_CLOUD_LOW_LAYER","36.5_33.25_CLOUD_LOW_LAYER","36.5_33_CLOUD_LOW_LAYER","36.25_33.5_CLOUD_LOW_LAYER","36.25_33.25_CLOUD_LOW_LAYER","36.25_33_CLOUD_LOW_LAYER")])]
+data <- data[order(hour,decreasing = F)]
+data <- data[order(date,decreasing = F)]
+data[, Year:=as.factor(year(date))]
+data[,Month := as.factor(month(date))]
+data[,Hour_factor := as.factor(hour)]
+data[,max_in_month:=runmax(x=data$production, k=720, align = "left")]
+data[,max_in_week:=runmax(x=data$production, k=168, align ="left")]
+data[hour<=5|hour>=21,night:=1]
+data[hour<21&hour>5,night:=0]
+data$night <- as.factor(data$night)
+data[,Lag1:=c(NA, data$production[1:(.N-1)])]
+data[,Lag_week:=c(rep(NA,168), data$production[1:(.N-24*7)])]
+data[,Lag_day:=c(rep(NA,24), data$production[1:(.N-24)])]
+data[, Trend:=(1:.N)]
+colnames(data) <- c("date","hour","CLOUD_LOW_LAYER_36.25_33","DSWRF_36.25_33","REL_HUMIDITY_36.25_33","TEMP_36.25_33","CLOUD_LOW_LAYER_36.25_33.25","DSWRF_36.25_33.25","REL_HUMIDITY_36.25_33.25","TEMP_36.25_33.25","CLOUD_LOW_LAYER_36.25_33.5","DSWRF_36.25_33.5","REL_HUMIDITY_36.25_33.5","TEMP_36.25_33.5","CLOUD_LOW_LAYER_36.5_33","DSWRF_36.5_33","REL_HUMIDITY_36.5_33","TEMP_36.5_33","CLOUD_LOW_LAYER_36.5_33.25","DSWRF_36.5_33.25","REL_HUMIDITY_36.5_33.25","TEMP_36.5_33.25","CLOUD_LOW_LAYER_36.5_33.5","DSWRF_36.5_33.5","REL_HUMIDITY_36.5_33.5","TEMP_36.5_33.5","CLOUD_LOW_LAYER_36.75_33","DSWRF_36.75_33","REL_HUMIDITY_36.75_33","TEMP_36.75_33","CLOUD_LOW_LAYER_36.75_33.25","DSWRF_36.75_33.25","REL_HUMIDITY_36.75_33.25","TEMP_36.75_33.25","CLOUD_LOW_LAYER_36.75_33.5","DSWRF_36.75_33.5","REL_HUMIDITY_36.75_33.5","TEMP_36.75_33.5","production","AverageTEMP","AverageREL_HUMIDITY","AverageDSWRF","AverageCLOUD_LOW_LAYER","Year","Month","Hour_factor","max_in_month","max_in_week","night","Lag1","Lag_week","Lag_day","Trend")
+View(data)
+```
+
+Data Analysis:
+
+Before going into models, the data is analyzed firstly. Since the data includes a very long time, only April and May 2022 are examined. As there can be seen below, production is 0 at nigh times and it reaches its maximum during midday hours. It does makes sense because electiricity production is affected directly by sunlight.
+
+```{r,warning=FALSE}
+ggplot(subset(production,date >= "2022-04-01"),aes(x=date, y=production))+
+geom_line()+geom_point()+ggtitle("Electricity Production April-May 2022")
+```
+Then, the data is plotted to see if there is a part of the data which should be removed before creating the model.
+
+```{r,warning=FALSE}
+plot(data$date, data$production, type="line", main="Plot of the Data")
+```
+
+```{r,warning=FALSE}
+plot(ts(data$production,freq=24))
+
+decomposed = decompose(ts(data$production,freq=24))
+plot(decomposed)
+
+ggplot(data[date=="2022-05-06"], aes(x=hour, y= production)) +
+  geom_line(color= "red") +
+  labs(title = "Hourly Electricity Production Data in 06/05/22 ",
+       x = "Hour",
+       y= "Production (MWh)") 
+```
+The additive decomposition plots show that the data is not stationary currently, which show there's some information in the data in order to create good predictions with it. The plots show clear hourly, yearly and dayly seasonality and trend; they should be dealt with.
+
+Lastly, to investigate relations between averages of variables with production, correlation plot is created. 
+
+```{r,warning=FALSE}
+
+ggpairs(data,columns = c("AverageTEMP","AverageREL_HUMIDITY","AverageDSWRF","AverageCLOUD_LOW_LAYER","production"))
+
+```
+As there can be seen, there is a high and positive correlation between average DSWRF and production. After DSRWF, temperature has also a positive correlation with production.
+
+```{r}
+acf(data$production)
+pacf(data$production)
+```
+
+The autocorrelation function shows sinusoidal behavior while partial autocorrelation function show significance at the first two lags.
+
+Models:
+```{r,warning=FALSE}
+
+model1 <- lm(production~Trend, data)
+summary(model1)
+checkresiduals(model1)
+AIC(model1)
+BIC(model1)
+
+model2 <- lm(production~Hour_factor, data)
+summary(model2)
+checkresiduals(model2)
+AIC(model2)
+BIC(model2)
+
+model3 <- lm(production~Hour_factor+Month, data)
+summary(model3)
+checkresiduals(model3)
+AIC(model3)
+BIC(model3)
+
+model4 <- lm(production~Hour_factor+Month+Year, data)
+summary(model4)
+checkresiduals(model4)
+AIC(model4)
+BIC(model4)
+
+model5 <- lm(production~Hour_factor+Month+Year+Trend, data)
+summary(model5)
+checkresiduals(model5)
+AIC(model5)
+BIC(model5)
+```
+Dummy variables for month, year, hour and trend component each make a contribution to the model, making residuals closer to normal with zero mean and constant variable assumptions and each increase adjusted R_squared.
+
+```{r}
+model6 <- lm(production~Hour_factor+Month+Year+Trend+Lag1, data)
+summary(model6)
+checkresiduals(model6)
+AIC(model6)
+BIC(model6)
+
+model7 <- lm(production~Hour_factor+Month+Year+Trend+Lag1+Lag_day, data)
+summary(model7)
+checkresiduals(model7)
+AIC(model7)
+BIC(model7)
+
+model8 <- lm(production~Hour_factor+Month+Year+Trend+Lag1+Lag_week+Lag_day, data)
+summary(model8)
+checkresiduals(model8)
+AIC(model8)
+BIC(model8)
+
+```
+The autoregressive lags of one hour, one week and one day each make a contribution to the model and increase the adjusted R-squared value. 
+
+
+```{r}
+
+model9 <- lm(production~.-AverageTEMP-AverageREL_HUMIDITY-AverageDSWRF-AverageCLOUD_LOW_LAYER, data)
+summary(model9)
+checkresiduals(model9)
+AIC(model9)
+BIC(model9)
+
+model10 <- lm(production~.-AverageTEMP-AverageREL_HUMIDITY-AverageDSWRF-AverageCLOUD_LOW_LAYER-DSWRF_36.25_33.5  -CLOUD_LOW_LAYER_36.25_33-CLOUD_LOW_LAYER_36.25_33.25-CLOUD_LOW_LAYER_36.25_33.5-REL_HUMIDITY_36.5_33-REL_HUMIDITY_36.5_33.5-TEMP_36.5_33.5 -CLOUD_LOW_LAYER_36.75_33 -DSWRF_36.75_33 -CLOUD_LOW_LAYER_36.75_33.25 -DSWRF_36.75_33.25-CLOUD_LOW_LAYER_36.75_33.5  , data)
+summary(model10)
+checkresiduals(model10)
+AIC(model10)
+BIC(model10)
+```
+All the exogenous variables are added to the linear regression model, however some of the insignificant ones are removed to get a more contact model.
+
+```{r}
+model11 <- auto.arima(data[,"production"], seasonal =TRUE, trace=T)
+summary(model11)
+checkresiduals(model11)
+AIC(model11)
+BIC(model11)
+
+model12 <- auto.arima(data[,"production"], seasonal =FALSE, trace=T)
+summary(model12)
+checkresiduals(model12)
+AIC(model12)
+BIC(model12)
+
+AvgDSWRF <- as.numeric(data[,AverageDSWRF])
+model13 <- auto.arima(data[,"production"], xreg= AvgDSWRF, seasonal =FALSE, trace=T)
+summary(model13)
+checkresiduals(model13)
+AIC(model13)
+BIC(model13)
+
+AvgTEMP <- as.numeric(data[,AverageTEMP])
+model14 <- auto.arima(data[,"production"], xreg= AvgTEMP, seasonal =FALSE, trace=T)
+summary(model14)
+checkresiduals(model14)
+AIC(model14)
+BIC(model14)
+
+model15 <- arima(data[,"production"],c(2,0,0))
+summary(model15)
+checkresiduals(model15)
+AIC(model15)
+BIC(model15)
+
+model16 <- arima(data[,"production"],c(3,0,0))
+summary(model16)
+checkresiduals(model16)
+AIC(model16)
+BIC(model16)
+
+model17 <- arima(data[,"production"],c(4,0,1))
+summary(model17)
+checkresiduals(model17)
+AIC(model17)
+BIC(model17)
+
+```
+Both auto.arima is used to develop different models and self-developed models are formed from the information given by partial auto correlation and autocorrelation plots. Arima models explain a large portion of the data, however the best linear regression model seems to be better than the arima models considering their AIC and BIC measures.
+
+
+
+Model Selection & Chosen Approach:
+
+```{r,warning=FALSE}
+final_model=model10
+```
+
+Among different models developed, the Akaike and Bayesian information criteria give the smallest result with model 10, which is a linear regression model with autoregressive components, moving average components, dummy variables for yearly, monthly and hourly seasonality, trend component and variables given except the ones that are really insignificant. So, model10 is used as the final model.
+
+
+Prediction & Results:
+
+Data is manipulated before making predictions in order to use the real weather forecasts that is not developed with the model created but given.
+
+```{r,warning=FALSE}
+long_weather1 = 
+  long_weather %>% 
+  arrange(long_weather) %>% 
+  mutate(value= shift(value,-2592))
+
+long_weather1=long_weather1[-c((.N-6047):.N),]
+wide_weather1= dcast(long_weather1, date+hour~lat+lon+variable)
+data1 <- data.table(merge(wide_weather1,production))
+data1[,AverageTEMP:=rowMeans(data1[,c("36.75_33.5_TEMP","36.75_33.25_TEMP","36.75_33_TEMP","36.5_33.5_TEMP","36.5_33.25_TEMP","36.5_33_TEMP","36.25_33.5_TEMP","36.25_33.25_TEMP","36.25_33_TEMP")])]
+data1[,AverageREL_HUMIDITY:=rowMeans(data1[,c("36.75_33.5_REL_HUMIDITY","36.75_33.25_REL_HUMIDITY","36.75_33_REL_HUMIDITY","36.5_33.5_REL_HUMIDITY","36.5_33.25_REL_HUMIDITY","36.5_33_REL_HUMIDITY","36.25_33.5_REL_HUMIDITY","36.25_33.25_REL_HUMIDITY","36.25_33_REL_HUMIDITY")])]
+data1[,AverageDSWRF:=rowMeans(data1[,c("36.75_33.5_DSWRF","36.75_33.25_DSWRF","36.75_33_DSWRF","36.5_33.5_DSWRF","36.5_33.25_DSWRF","36.5_33_DSWRF","36.25_33.5_DSWRF","36.25_33.25_DSWRF","36.25_33_DSWRF")])]
+data1[,AverageCLOUD_LOW_LAYER:=rowMeans(data1[,c("36.75_33.5_CLOUD_LOW_LAYER","36.75_33.25_CLOUD_LOW_LAYER","36.75_33_CLOUD_LOW_LAYER","36.5_33.5_CLOUD_LOW_LAYER","36.5_33.25_CLOUD_LOW_LAYER","36.5_33_CLOUD_LOW_LAYER","36.25_33.5_CLOUD_LOW_LAYER","36.25_33.25_CLOUD_LOW_LAYER","36.25_33_CLOUD_LOW_LAYER")])]
+data1 <- data1[order(hour,decreasing = F)]
+data1 <- data1[order(date,decreasing = F)]
+data1[, Year:=as.factor(year(date))]
+data1[,Month := as.factor(month(date))]
+data1[,Hour_factor := as.factor(hour)]
+data1[,max_in_month:=runmax(x=data$production, k=720, align = "left")]
+data1[,max_in_week:=runmax(x=data$production, k=168, align ="left")]
+data1[hour<=5|hour>=21,night:=1]
+data1[hour<21&hour>5,night:=0]
+data1$night <- as.factor(data1$night)
+data1[,Lag1:=c(NA, data1$production[1:(.N-1)])]
+data1[,Lag_week:=c(rep(NA,168), data1$production[1:(.N-24*7)])]
+data1[,Lag_day:=c(rep(NA,24), data1$production[1:(.N-24)])]
+data1[, Trend:=(1:.N)]
+colnames(data1) <- c("date","hour","CLOUD_LOW_LAYER_36.25_33","DSWRF_36.25_33","REL_HUMIDITY_36.25_33","TEMP_36.25_33","CLOUD_LOW_LAYER_36.25_33.25","DSWRF_36.25_33.25","REL_HUMIDITY_36.25_33.25","TEMP_36.25_33.25","CLOUD_LOW_LAYER_36.25_33.5","DSWRF_36.25_33.5","REL_HUMIDITY_36.25_33.5","TEMP_36.25_33.5","CLOUD_LOW_LAYER_36.5_33","DSWRF_36.5_33","REL_HUMIDITY_36.5_33","TEMP_36.5_33","CLOUD_LOW_LAYER_36.5_33.25","DSWRF_36.5_33.25","REL_HUMIDITY_36.5_33.25","TEMP_36.5_33.25","CLOUD_LOW_LAYER_36.5_33.5","DSWRF_36.5_33.5","REL_HUMIDITY_36.5_33.5","TEMP_36.5_33.5","CLOUD_LOW_LAYER_36.75_33","DSWRF_36.75_33","REL_HUMIDITY_36.75_33","TEMP_36.75_33","CLOUD_LOW_LAYER_36.75_33.25","DSWRF_36.75_33.25","REL_HUMIDITY_36.75_33.25","TEMP_36.75_33.25","CLOUD_LOW_LAYER_36.75_33.5","DSWRF_36.75_33.5","REL_HUMIDITY_36.75_33.5","TEMP_36.75_33.5","production","AverageTEMP","AverageREL_HUMIDITY","AverageDSWRF","AverageCLOUD_LOW_LAYER","Year","Month","Hour_factor","max_in_month","max_in_week","night","Lag1","Lag_week","Lag_day","Trend")
+
+
+tmp= data1[(.N-71):(.N)]
+
+predictions = rep(0,72)
+for(i in 1:72) {
+  predictions[i] = predict(final_model,newdata = tmp[i,])
+  tmp[i+1,"Lag1"] = predictions[i]
+  if(predictions[i]<0){predictions[i]=0}
+}
+predictions[49:72]
+
+```
+
+
+Conclusion:
+
+  For understanding the behavior of the data, autoregressive, moving average and arima methods are used. Trend and seasonality are added for analyzing time dependency and autocorrelation of the data. After that process, temperature, relative humidity, downward shortwave radiation flux and cloud cover data are added and subtracted to see the correlation and relations between them and the production rate. Also, for the arima part of model trials, different p (for autoregression part), q (for moving average part) and d (for the number of differencing) values are tried in addition to the auto.arima trials. 
+  
+  Model10 is a linear regression model with trend and seasonality components that also contains autoregressive components with lags 1,24,168 to account for hourly, dayly and weekly seasonality and trend. This model contains dummy variables for hour, day, month and year and moving average component that gives maximum production level within the week and within the month. Model10 is used as the final model because the AIC and BIC performance measures as well as the adjusted R_squared value gives the best result among the models developed.
+  
+  The residuals of the final model is not perfect white noise as it should have been, however there is no visible seasonality left in the autocorrelation function and even though there is autocorrelation among some variables, they are small. The residuals seem to be normally distributed and around zero mean with constant variation. There is no visible trend and/or seasonality left in the residuals, which show that the predictions that this model come up with can be used.
+  The predictions are made for two days ahead using the variables related to weather forecast information that belong to the day that is being predicted and using model10 created with the data from two days before.
